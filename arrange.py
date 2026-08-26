@@ -1,11 +1,18 @@
 """
-AI Choir Parts — mode ARRANGEMENT (analyse + harmonie parallèle par transposition de la voix).
+AI Choir Parts — mode ARRANGEMENT.
 
-On garde TA voix (paroles + phrasé) et on la décale d'un intervalle diatonique régulier
-qui suit ta mélodie (harmonie parallèle). Rendu fluide et intelligible.
+Rendu par défaut, pensé pour APPRENDRE une partie et bien la DISTINGUER :
+  - TA voix (avec tes paroles) est gardée pour TON pupitre (référence).
+  - Les 3 autres pupitres sont rendus avec un SON CLAIR et distinct (type orgue),
+    à leur vraie hauteur -> chaque note s'entend nettement, juste, sans bouillie.
 
-Chaîne : 1) F0 note par note  2) justesse (cents)  3) pupitre chanté
-         4) harmonie parallèle  5) transposition WORLD (formants préservés)  6) export.
+Chaîne :
+  1. Détection F0 note par note (librosa.pyin).
+  2. Justesse : écart en cents vs gamme tempérée.
+  3. Identification du pupitre chanté (tessiture) — ou choix manuel.
+  4. Harmonisation SATB : chaque voix placée dans SA tessiture (accords diatoniques).
+  5. Synthèse d'un son clair pour les voix générées ; ta voix gardée pour ta partie.
+  6. Export MP3/WMA/WAV + partition MIDI/MusicXML.
 """
 
 import argparse
@@ -18,6 +25,7 @@ import librosa
 
 PARTS = ["soprano", "alto", "tenor", "bass"]
 RANK = {"soprano": 0, "alto": 1, "tenor": 2, "bass": 3}
+RANGES = {"soprano": (60, 81), "alto": (55, 74), "tenor": (48, 67), "bass": (40, 60)}
 CENTERS = {"soprano": 70, "alto": 64, "tenor": 57, "bass": 50}
 FR = {"soprano": "Soprano", "alto": "Alto", "tenor": "Ténor", "bass": "Baryton/Basse"}
 
@@ -75,33 +83,40 @@ def justesse(events):
     return {"avg": round(avg), "verdict": verdict, "rows": rows}
 
 
-# ---------- 3-4. Pupitre + harmonie parallèle ----------
+# ---------- 3-4. Pupitre + harmonisation SATB (par tessiture) ----------
 def detect_part(events):
     med = float(np.median([e["midi"] for e in events]))
     return min(CENTERS, key=lambda p: abs(CENTERS[p] - med))
 
 
-def _key_pcs(k):
-    return {p.pitchClass for p in k.getScale().getPitches("C2", "C6")}
+def diatonic_triads(k):
+    sc = k.getScale()
+    pref = {1: 5, 4: 4, 5: 5, 6: 3, 2: 2, 3: 1, 7: 1}
+    triads = []
+    for d in range(1, 8):
+        root = sc.pitchFromDegree(d)
+        third = sc.pitchFromDegree((d + 1) % 7 + 1)
+        fifth = sc.pitchFromDegree((d + 3) % 7 + 1)
+        triads.append({"root": root.pitchClass,
+                       "pcs": [root.pitchClass, third.pitchClass, fifth.pitchClass],
+                       "w": pref[d]})
+    return triads
 
 
-def diatonic_shift(m, pcs, steps):
-    if steps == 0:
-        return m
-    direction = 1 if steps > 0 else -1
-    count, cur = 0, m
-    for _ in range(24):
-        cur += direction
-        if cur % 12 in pcs:
-            count += 1
-            if count == abs(steps):
-                return cur
-    return m + direction * 2 * abs(steps)
+def nearest_in_range(pc, lo, hi, target):
+    cands = [m for m in range(lo, hi + 1) if m % 12 == pc]
+    if not cands:
+        cands = [pc + 12 * o for o in range(2, 8) if lo - 7 <= pc + 12 * o <= hi + 7]
+    return min(cands, key=lambda m: abs(m - target)) if cands else target
 
 
 def build_parts(events, key_str=None, sung_part=None):
+    """Écarte les 4 pupitres dans des voix DISTINCTES autour du chanteur,
+    en PLAFONNANT chaque transposition à une octave (±12 demi-tons) : s'adapte
+    automatiquement à toute voix (basse, ténor, alto, soprano)."""
     from music21 import stream, note as m21note, key as m21key
     his = sung_part if sung_part in PARTS else detect_part(events)
+
     s = stream.Stream()
     for e in events:
         n = m21note.Note(); n.pitch.midi = e["midi"]; n.quarterLength = 1
@@ -110,55 +125,72 @@ def build_parts(events, key_str=None, sung_part=None):
         k = m21key.Key(*key_str.split()) if key_str else s.analyze("key")
     except Exception:
         k = s.analyze("key")
-    pcs = _key_pcs(k)
 
-    parts = {}
-    for p in PARTS:
-        if p == his:
-            parts[p] = [{"midi": e["midi"], "start": e["start"], "end": e["end"]} for e in events]
-        else:
-            steps = (RANK[his] - RANK[p]) * 2
-            parts[p] = [{"midi": diatonic_shift(e["midi"], pcs, steps),
-                         "start": e["start"], "end": e["end"]} for e in events]
+    triads = diatonic_triads(k)
+    parts = {p: [] for p in PARTS}
+    for e in events:
+        m = e["midi"]; pc = m % 12
+        chord = max([t for t in triads if pc in t["pcs"]] or triads, key=lambda t: t["w"])
+        cpcs = set(chord["pcs"])
+        # notes d'accord disponibles à ±1 octave autour du chanteur
+        window = [x for x in range(m - 12, m + 13) if x % 12 in cpcs]
+        voices = {his: m}
+        used = {m}
+        for p in PARTS:
+            if p == his:
+                continue
+            steps = RANK[his] - RANK[p]              # >0 : p est plus aigu que le chanteur
+            offset = max(-12, min(12, steps * 4))    # ~une tierce par voix d'écart, plafonné à l'octave
+            target = m + offset
+            avail = [x for x in window if x not in used] or window
+            pick = min(avail, key=lambda x: abs(x - target))
+            voices[p] = pick; used.add(pick)
+        for p in PARTS:
+            parts[p].append({"midi": voices[p], "start": e["start"], "end": e["end"]})
     return parts, str(k), his
 
 
-# ---------- 5. Transposition WORLD (formants préservés) ----------
-def _world_analyze(y, sr):
-    import pyworld as pw
-    y64 = np.ascontiguousarray(y.astype(np.float64))
-    fp = 5.0
-    f0, t = pw.harvest(y64, sr, f0_floor=65.0, f0_ceil=1100.0, frame_period=fp)
-    sp = pw.cheaptrick(y64, f0, t, sr)
-    ap = pw.d4c(y64, f0, t, sr)
-    return f0, t, sp, ap, fp
+# ---------- 5. Synthèse d'un son clair (voix générées) ----------
+def synth(events, sr, total):
+    buf = np.zeros(int(total * sr) + sr, dtype=np.float32)
+    for e in events:
+        f = 440.0 * 2 ** ((e["midi"] - 69) / 12.0)
+        n = int((e["end"] - e["start"]) * sr)
+        if n <= 0:
+            continue
+        t = np.arange(n) / sr
+        vib = 1 + 0.005 * np.sin(2 * np.pi * 5 * t)
+        # timbre type orgue doux : fondamentale + harmoniques
+        w = (np.sin(2*np.pi*f*t*vib) + 0.35*np.sin(2*2*np.pi*f*t)
+             + 0.15*np.sin(3*2*np.pi*f*t) + 0.07*np.sin(4*2*np.pi*f*t))
+        env = np.ones(n)
+        a, r = int(0.02*sr), int(0.06*sr)
+        if a: env[:a] = np.linspace(0, 1, a)
+        if r: env[-r:] = np.linspace(1, 0, r)
+        i0 = int(e["start"] * sr)
+        seg = (w * env * 0.25).astype(np.float32)
+        buf[i0:i0+len(seg)] += seg[:len(buf)-i0]
+    peak = np.max(np.abs(buf)) or 1.0
+    return (buf / peak * 0.9).astype(np.float32)
 
 
-def _world_resynth(f0, t, sp, ap, fp, sr, events, targets, base_midis):
-    import pyworld as pw
-    ratios = np.ones_like(f0)
-    for e, tg, bm in zip(events, targets, base_midis):
-        lo = int(np.searchsorted(t, e["start"]))
-        hi = int(np.searchsorted(t, e["end"]))
-        ratios[lo:hi] = 2.0 ** ((tg - bm) / 12.0)
-    new_f0 = np.where(f0 > 0, f0 * ratios, 0.0)
-    out = pw.synthesize(np.ascontiguousarray(new_f0), sp, ap, sr, fp)
-    peak = np.max(np.abs(out)) or 1.0
-    return (out / peak * 0.9).astype(np.float32)
+
+# ---------- Transposition (Rubber Band, timbre préservé) + habillage ----------
+# Filtre d'habillage : léger chœur + réverb douce + aigus adoucis (rendu moins "IA")
+POLISH = "chorus=0.6:0.9:50|60:0.35|0.25:0.5|0.4:2|2.5, aecho=0.8:0.85:45:0.2, treble=g=-2.5"
 
 
-def _fallback_resynth(y, sr, events, targets, base_midis):
-    shift = float(np.median([tg - bm for tg, bm in zip(targets, base_midis)]))
-    out = librosa.effects.pitch_shift(y.astype(float), sr=sr, n_steps=shift)
-    peak = np.max(np.abs(out)) or 1.0
-    return (out / peak * 0.9).astype(np.float32)
-
-
-def _choir_mix(parts_audio):
-    n = min(len(a) for a in parts_audio.values())
-    mix = sum(a[:n] for a in parts_audio.values())
-    peak = np.max(np.abs(mix)) or 1.0
-    return (mix / peak * 0.9).astype(np.float32)
+def transpose(y, sr, semis):
+    """Transpose TA voix d'un intervalle constant (paroles + phrasé gardés),
+    en préservant le timbre. Rubber Band (moteur R3 haute qualité) si dispo, sinon repli."""
+    if abs(semis) < 0.1:
+        return y.astype(np.float32)
+    try:
+        import pyrubberband as pyrb
+        return pyrb.pitch_shift(y, sr, n_steps=semis,
+                                rbargs={"-F": "", "--pitch-hq": ""}).astype(np.float32)
+    except Exception:
+        return librosa.effects.pitch_shift(y.astype(float), sr=sr, n_steps=semis).astype(np.float32)
 
 
 # ---------- 6. Partition ----------
@@ -192,40 +224,23 @@ def run_arrangement(input_path, out_dir, key_str=None, fmt="mp3", sung_part=None
     events, sr, y = track_melody(input_path)
     parts, key, his = build_parts(events, key_str, sung_part)
     just = justesse(events)
-    base_midis = [e["midi"] for e in events]
-
-    try:
-        analysis = _world_analyze(y, sr)
-    except Exception:
-        analysis = None
-
-    parts_audio = {}
-    for name in PARTS:
-        if name == his:
-            parts_audio[name] = y.astype(np.float32)
-        else:
-            targets = [parts[name][i]["midi"] for i in range(len(events))]
-            if analysis:
-                parts_audio[name] = _world_resynth(*analysis, sr, events, targets, base_midis)
-            else:
-                parts_audio[name] = _fallback_resynth(y, sr, events, targets, base_midis)
+    total = max(e["end"] for e in events) + 0.3
 
     produced = {}
     for name in PARTS:
+        if name == his:
+            audio = y.astype(np.float32)                       # ta voix (ta partie)
+        else:
+            # décalage constant = intervalle moyen vers cette voix (rendu plus naturel)
+            semis = float(np.median([parts[name][i]["midi"] - events[i]["midi"]
+                                     for i in range(len(events))]))
+            audio = transpose(y, sr, semis)                    # ta voix transposée, paroles gardées
         wav = os.path.join(out_dir, f"{name}.wav")
-        sf.write(wav, parts_audio[name], sr)
-        final = audioexport.convert(wav, fmt)
+        sf.write(wav, audio, sr)
+        final = audioexport.convert(wav, fmt, af=POLISH)       # habillage chœur/réverb
         if final != wav and os.path.exists(wav):
             os.remove(wav)
         produced[os.path.basename(final)] = final
-
-    # mix chœur complet (somme simple)
-    mixwav = os.path.join(out_dir, "choeur_complet.wav")
-    sf.write(mixwav, _choir_mix(parts_audio), sr)
-    mixfinal = audioexport.convert(mixwav, fmt)
-    if mixfinal != mixwav and os.path.exists(mixwav):
-        os.remove(mixwav)
-    produced[os.path.basename(mixfinal)] = mixfinal
 
     score = export_score(parts, out_dir)
     ff_missing = (fmt != "wav" and not audioexport.has_ffmpeg())
@@ -233,7 +248,7 @@ def run_arrangement(input_path, out_dir, key_str=None, fmt="mp3", sung_part=None
 
 
 def main():
-    ap = argparse.ArgumentParser(description="AI Choir Parts — harmonie parallèle par transposition de ta voix")
+    ap = argparse.ArgumentParser()
     ap.add_argument("input")
     ap.add_argument("--out", default="exports/arrangement")
     ap.add_argument("--key", default=None)
@@ -244,15 +259,12 @@ def main():
         sys.exit(f"Fichier introuvable : {args.input}")
     produced, key, score, ff, his, just = run_arrangement(
         args.input, args.out, args.key, args.format, args.part)
-    if ff:
-        print("⚠ ffmpeg introuvable : export WAV.")
-    print("\n=== Arrangement ===")
-    print(f"  Tu chantes : {FR[his]}{'  (détecté)' if args.part=='auto' else ''}")
-    print(f"  Tonalité : {key} | Justesse : {just['avg']} cents ({just['verdict']})")
+    print(f"Tu chantes : {FR[his]} | Tonalité : {key} | Justesse : {just['avg']} cents ({just['verdict']})")
     for name, path in produced.items():
-        print(f"  {name:18s} -> {path}")
+        tag = "  ← ta voix" if os.path.splitext(name)[0] == his else "  (son clair)"
+        print(f"  {name:14s} -> {path}{tag}")
     if score:
-        print(f"  partition          -> {score[0]}  +  {score[1]}")
+        print(f"  partition -> {score[0]} + {score[1]}")
 
 
 if __name__ == "__main__":

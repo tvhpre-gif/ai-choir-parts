@@ -40,23 +40,26 @@ def to_wav(src, out_dir=None):
     return dst
 
 
-def convert(src_wav, fmt):
-    """Convertit src_wav vers fmt. Renvoie le chemin du fichier final.
-    - fmt 'wav' : renvoie le fichier tel quel.
+def convert(src_wav, fmt, af=None):
+    """Convertit src_wav vers fmt, avec un filtre audio optionnel `af` (habillage).
+    - fmt 'wav' sans filtre : renvoie le fichier tel quel.
     - ffmpeg absent : renvoie le WAV et laisse l'appelant prévenir l'utilisateur.
     """
     fmt = fmt.lower()
-    if fmt == "wav":
+    if fmt == "wav" and not af:
         return src_wav
-    if fmt not in _CODECS:
+    if fmt not in _CODECS and fmt != "wav":
         raise ValueError(f"Format non supporté : {fmt} (attendus : {', '.join(SUPPORTED)})")
     if not has_ffmpeg():
         return src_wav
-    dst = os.path.splitext(src_wav)[0] + "." + fmt
-    subprocess.run(
-        [FFMPEG, "-y", "-loglevel", "error", "-i", src_wav, *_CODECS[fmt], dst],
-        check=True,
-    )
+    dst = os.path.splitext(src_wav)[0] + ("_out." if fmt == "wav" else ".") + fmt
+    cmd = [FFMPEG, "-y", "-loglevel", "error", "-i", src_wav]
+    if af:
+        cmd += ["-af", af]
+    if fmt != "wav":
+        cmd += _CODECS[fmt]
+    cmd += [dst]
+    subprocess.run(cmd, check=True)
     return dst
 
 

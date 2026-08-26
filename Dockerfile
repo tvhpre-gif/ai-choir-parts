@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # ffmpeg (export MP3/WMA) + outils de compilation (pyworld)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg build-essential \
+        ffmpeg build-essential rubberband-cli \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
