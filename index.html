@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Choir Parts</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#14171c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Choir Parts">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(()=>{}));
+}
+</script>
+<style>
+  :root{
+    --bg:#14171c; --panel:#1c2027; --line:#2b313b;
+    --ink:#eef1f5; --muted:#8b94a3; --amber:#e0a955; --amber-dim:#7a6238;
+    --ok:#5fb98b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:40px 20px 80px}
+  h1{font-size:26px;letter-spacing:.3px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 28px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:18px}
+  .modes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+  .mode{border:1px solid var(--line);border-radius:10px;padding:12px 14px;cursor:pointer;background:#191d24}
+  .mode:has(input:checked){border-color:var(--amber);background:#231e12}
+  .mode input{margin-right:6px}
+  @media(max-width:560px){.modes{grid-template-columns:1fr}}
+  label.drop{display:block;border:1.5px dashed var(--line);border-radius:10px;padding:26px;text-align:center;
+    cursor:pointer;color:var(--muted)}
+  label.drop:hover{border-color:var(--amber-dim);color:var(--ink)}
+  input[type=file]{display:none}
+  .row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:14px}
+  button,.btn{font:inherit;color:var(--ink);background:#232833;border:1px solid var(--line);
+    border-radius:8px;padding:9px 14px;cursor:pointer}
+  button:hover{border-color:var(--amber-dim)}
+  .go{background:var(--amber);color:#1a1509;border-color:var(--amber);font-weight:600}
+  .go:hover{filter:brightness(1.05)}
+  .go:focus-visible,button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  small.hint{color:var(--muted)}
+  input[type=number]{width:74px;background:#232833;color:var(--ink);border:1px solid var(--line);
+    border-radius:6px;padding:6px}
+  select{background:#232833;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px}
+  .rec{margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  #recBtn.on{background:#b5462f;border-color:#b5462f;color:#fff}
+
+  .err{background:#3a2222;border:1px solid #6b3b3b;color:#f2c9c9;padding:12px 14px;border-radius:8px;margin-bottom:18px}
+  .note{color:var(--muted);font-size:13px}
+
+  .transport{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+  .track{display:grid;grid-template-columns:1fr auto;gap:6px 12px;align-items:center;
+    padding:12px 0;border-top:1px solid var(--line)}
+  .track:first-of-type{border-top:0}
+  .tname{font-weight:600}
+  .tnote{grid-column:1/-1;color:var(--muted);font-size:12.5px;margin-top:-2px}
+  .ctrls{display:flex;gap:8px;align-items:center}
+  .fader{width:170px;accent-color:var(--amber)}
+  .toggle.on{background:var(--amber);color:#1a1509;border-color:var(--amber)}
+  .solo.on{background:var(--ok);color:#0c1a13;border-color:var(--ok)}
+  a.dl{text-decoration:none;font-size:13px;padding:8px 10px}
+  .just{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:16px;background:#191d24}
+  .just summary{cursor:pointer;color:var(--amber);margin-top:8px;font-size:13px}
+  table.jt{border-collapse:collapse;margin-top:8px;font-size:13px;width:100%}
+  table.jt th,table.jt td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left}
+  table.jt th{color:var(--muted);font-weight:600}
+  .warn{margin-top:20px;padding:14px;border:1px solid var(--amber-dim);border-radius:8px;
+    background:#211d13;color:#e7d3a7;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AI Choir Parts</h1>
+  <p class="sub">Isole les voix d'un morceau pour répéter ta partie.</p>
+
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+  {% if not tracks %}
+  <form class="card" action="/analyser" method="post" enctype="multipart/form-data" id="form">
+    <div class="modes">
+      <label class="mode"><input type="radio" name="mode" value="arrange" checked>
+        <b>J'ai chanté le chant</b><br><small class="hint">→ ta voix rechantée sur alto / ténor / basse</small></label>
+      <label class="mode"><input type="radio" name="mode" value="extract">
+        <b>Chanson complète</b><br><small class="hint">→ séparer les voix déjà présentes</small></label>
+    </div>
+    <label class="drop" for="audio" id="drop">
+      <span id="dropText">Dépose ou choisis un fichier audio<br><small class="hint">MP3 · WAV · M4A · FLAC</small></span>
+    </label>
+    <input type="file" name="audio" id="audio" accept="audio/*">
+    <div class="rec">
+      <button type="button" class="btn" id="recBtn">🎤 Enregistrer ma voix</button>
+      <span class="mono" id="recTime" style="display:none">0:00</span>
+      <audio id="recPreview" controls style="display:none;width:100%;margin-top:8px"></audio>
+    </div>
+    <div class="row">
+      <label class="mono" id="partWrap">Je chante :
+        <select name="part" id="part">
+          <option value="auto">détection auto</option>
+          <option value="soprano">Soprano</option>
+          <option value="alto">Alto</option>
+          <option value="tenor">Ténor</option>
+          <option value="bass">Baryton/Basse</option>
+        </select>
+      </label>
+      <label class="mono" id="keyWrap">Tonalité :
+        <input type="text" name="key" placeholder="auto (ex: C minor)" style="width:120px">
+      </label>
+      <label class="mono" id="crossoverWrap" style="display:none">Partage aigus/graves
+        <input type="number" name="crossover" value="400" min="150" max="1200" step="50"> Hz
+      </label>
+      <button type="submit" class="go" id="submit">Générer les pupitres</button>
+      <small class="hint" id="wait" style="display:none">Traitement en cours — plusieurs minutes. Ne ferme pas l'onglet.</small>
+    </div>
+  </form>
+  <p class="note" id="arrHelp">Enregistre-toi <b>a cappella</b> (juste ta voix, sans musique de fond), puis dépose le fichier. Tu récupères chaque pupitre en MP3 à envoyer au groupe.</p>
+  <p class="note" id="extHelp" style="display:none">Au 1er lancement, les modèles se téléchargent (plusieurs centaines de Mo). Ensuite c'est en cache.</p>
+  {% endif %}
+
+  {% if tracks %}
+  <div class="card">
+    {% if info %}<p class="note" style="margin-top:0">{{ info }}</p>{% endif %}
+
+    {% if justesse %}
+    <div class="just">
+      <div><b>Justesse</b> — écart moyen <b>{{ justesse.avg }} cents</b>
+        ({{ justesse.verdict }}) <span class="hint">par rapport à la gamme tempérée</span></div>
+      <details><summary>Détail note par note</summary>
+        <table class="jt">
+          <tr><th>Note</th><th>Durée</th><th>Écart</th></tr>
+          {% for r in justesse.rows %}
+          <tr><td>{{ r.note }}</td><td>{{ r.dur }} s</td><td>{{ r.cents }} cents — {{ r.dir }}</td></tr>
+          {% endfor %}
+        </table>
+      </details>
+    </div>
+    {% endif %}
+    <div class="transport">
+      <button class="go" id="play">▶ Lecture</button>
+      <button id="stop">■ Stop</button>
+      <button class="toggle" id="loopBtn">Boucle</button>
+      <span class="mono" id="clock">0:00</span>
+      <label class="mono">A <input type="number" id="loopA" value="0" min="0" step="1"></label>
+      <label class="mono">B <input type="number" id="loopB" value="0" min="0" step="1"></label>
+      <small class="hint">A/B en secondes (B=0 → tout le morceau)</small>
+    </div>
+
+    {% for t in tracks %}
+    <div class="track" data-file="{{ t.file }}">
+      <div class="tname">{{ t.title }}</div>
+      <div class="ctrls">
+        <button class="toggle mute">Mute</button>
+        <button class="toggle solo">Solo</button>
+        <input class="fader" type="range" min="0" max="1" step="0.01" value="0.9">
+        <a class="btn dl" href="/audio/{{ t.file }}?dl=1" download title="Télécharger MP3">⬇ MP3</a>
+      </div>
+      <div class="tnote">{{ t.note }}</div>
+      <audio src="/audio/{{ t.file }}" preload="auto"></audio>
+    </div>
+    {% endfor %}
+
+    {% if extras %}
+    <p class="note" style="margin-top:14px">Partition (à ouvrir dans MuseScore) :
+      {% for e in extras %}<a class="dl" style="margin-right:10px" href="/audio/{{ e.file }}?dl=1" download>⬇ {{ e.label }}</a>{% endfor %}
+    </p>
+    {% endif %}
+
+    {% if kind == 'arrange' %}
+    <div class="warn">
+      Rappel honnête : c'est <b>ta voix</b> transposée sur chaque pupitre — tes paroles et ton
+      interprétation sont conservées. Mais c'est un seul timbre (le tien) sur toutes les voix,
+      et les transpositions lointaines (basse très grave) peuvent sonner un peu artificielles.
+      L'harmonisation est <b>générée</b> (accords diatoniques), pas forcément l'arrangement exact de ton groupe.
+    </div>
+    {% else %}
+    <div class="warn">
+      Rappel honnête : « aigus » / « graves » est un partage du spectre des chœurs, pas une vraie séparation
+      Soprano/Alto/Ténor/Basse — ces pistes se chevauchent. Elles servent à faire ressortir une ligne, pas à l'isoler parfaitement.
+    </div>
+    {% endif %}
+  </div>
+  <p class="note"><a href="/" style="color:var(--amber)">← Traiter un autre fichier</a></p>
+  {% endif %}
+</div>
+
+<script>
+// --- Upload : nom de fichier + état d'attente ---
+const audio = document.getElementById('audio');
+if (audio){
+  const drop = document.getElementById('drop'), txt = document.getElementById('dropText');
+  audio.addEventListener('change', ()=>{ if(audio.files[0]) txt.textContent = audio.files[0].name; });
+
+  // Bascule mode arrangement / extraction
+  const modeRadios = [...document.querySelectorAll('input[name=mode]')];
+  const crossoverWrap = document.getElementById('crossoverWrap');
+  const submit = document.getElementById('submit');
+  const arrHelp = document.getElementById('arrHelp'), extHelp = document.getElementById('extHelp');
+  function syncMode(){
+    const m = (modeRadios.find(r=>r.checked)||{}).value;
+    const extract = m === 'extract';
+    crossoverWrap.style.display = extract ? 'inline-block' : 'none';
+    document.getElementById('partWrap').style.display = extract ? 'none' : 'inline-block';
+    document.getElementById('keyWrap').style.display = extract ? 'none' : 'inline-block';
+    submit.textContent = extract ? 'Séparer les voix' : 'Générer les pupitres';
+    arrHelp.style.display = extract ? 'none' : 'block';
+    extHelp.style.display = extract ? 'block' : 'none';
+  }
+  modeRadios.forEach(r=>r.addEventListener('change', syncMode));
+  syncMode();
+
+  document.getElementById('form').addEventListener('submit', (ev)=>{
+    if (!audio.files.length && window._recBlob){   // repli si DataTransfer indisponible
+      ev.preventDefault();
+      const fd=new FormData(document.getElementById('form'));
+      fd.set('audio', window._recBlob, window._recName||'chant.webm');
+      submit.disabled=true; submit.textContent='Traitement…';
+      document.getElementById('wait').style.display='inline';
+      fetch('/analyser',{method:'POST',body:fd}).then(r=>r.text()).then(h=>{
+        document.open(); document.write(h); document.close();
+      }).catch(()=>{ alert('Envoi impossible.'); submit.disabled=false; });
+      return;
+    }
+    submit.disabled = true; submit.textContent = 'Traitement…';
+    document.getElementById('wait').style.display = 'inline';
+  });
+
+  // --- Enregistrement micro dans l'app (iPhone + Android) ---
+  const recBtn=document.getElementById('recBtn'), recTime=document.getElementById('recTime'),
+        recPreview=document.getElementById('recPreview');
+  let mediaRec, chunks=[], recTimer, recSecs=0;
+  function rfmt(s){return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');}
+  if (recBtn) recBtn.addEventListener('click', async ()=>{
+    if (mediaRec && mediaRec.state==='recording'){ mediaRec.stop(); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      alert("Micro non disponible sur ce navigateur. Importe un fichier à la place."); return;
+    }
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      chunks=[]; mediaRec=new MediaRecorder(stream);
+      mediaRec.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+      mediaRec.onstop=()=>{
+        clearInterval(recTimer); stream.getTracks().forEach(t=>t.stop());
+        const blob=new Blob(chunks,{type:(mediaRec.mimeType||'audio/webm')});
+        recPreview.src=URL.createObjectURL(blob); recPreview.style.display='block';
+        const ext = blob.type.includes('mp4')||blob.type.includes('aac') ? 'm4a'
+                  : blob.type.includes('ogg') ? 'ogg' : 'webm';
+        try{ const dt=new DataTransfer(); dt.items.add(new File([blob],'chant.'+ext,{type:blob.type})); audio.files=dt.files; }
+        catch(_){ window._recBlob=blob; window._recName='chant.'+ext; }
+        txt.textContent='Enregistrement prêt ('+rfmt(recSecs)+') — appuie sur le bouton pour générer';
+        recBtn.textContent='🎤 Recommencer'; recBtn.classList.remove('on');
+      };
+      mediaRec.start(); recSecs=0; recTime.style.display='inline'; recTime.textContent='0:00';
+      recTimer=setInterval(()=>{ recSecs++; recTime.textContent=rfmt(recSecs); },1000);
+      recBtn.textContent='⏹ Arrêter'; recBtn.classList.add('on');
+    }catch(err){ alert("Accès micro refusé : "+err.message); }
+  });
+}
+
+// --- Mixeur synchronisé ---
+const tracks = [...document.querySelectorAll('.track')].map(el=>({
+  el, audio: el.querySelector('audio'),
+  fader: el.querySelector('.fader'),
+  mute: el.querySelector('.mute'),
+  solo: el.querySelector('.solo'),
+  muted:false, soloed:false
+}));
+
+if (tracks.length){
+  const master = tracks[0].audio;         // horloge de référence
+  const playBtn = document.getElementById('play');
+  const stopBtn = document.getElementById('stop');
+  const loopBtn = document.getElementById('loopBtn');
+  const clock = document.getElementById('clock');
+  const loopA = document.getElementById('loopA'), loopB = document.getElementById('loopB');
+  let looping = false;
+
+  function anySolo(){ return tracks.some(t=>t.soloed); }
+  function applyGains(){
+    const solo = anySolo();
+    tracks.forEach(t=>{
+      const audible = solo ? t.soloed : !t.muted;
+      t.audio.volume = audible ? parseFloat(t.fader.value) : 0;
+    });
+  }
+  tracks.forEach(t=>{
+    t.fader.addEventListener('input', applyGains);
+    t.mute.addEventListener('click', ()=>{ t.muted=!t.muted; t.mute.classList.toggle('on',t.muted); applyGains(); });
+    t.solo.addEventListener('click', ()=>{ t.soloed=!t.soloed; t.solo.classList.toggle('on',t.soloed); applyGains(); });
+  });
+  applyGains();
+
+  function fmt(s){ s=Math.max(0,Math.floor(s)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+  function syncTo(t){ tracks.forEach(x=>{ if(Math.abs(x.audio.currentTime-t)>0.08) x.audio.currentTime=t; }); }
+
+  async function play(){ syncTo(master.currentTime); await Promise.all(tracks.map(t=>t.audio.play())); }
+  function pause(){ tracks.forEach(t=>t.audio.pause()); }
+  let playing=false;
+  playBtn.addEventListener('click', async ()=>{
+    playing=!playing;
+    if(playing){ await play(); playBtn.textContent='❚❚ Pause'; }
+    else { pause(); playBtn.textContent='▶ Lecture'; }
+  });
+  stopBtn.addEventListener('click', ()=>{ pause(); syncTo(0); playing=false; playBtn.textContent='▶ Lecture'; clock.textContent='0:00'; });
+  loopBtn.addEventListener('click', ()=>{ looping=!looping; loopBtn.classList.toggle('on',looping); });
+
+  master.addEventListener('timeupdate', ()=>{
+    clock.textContent = fmt(master.currentTime);
+    const a=parseFloat(loopA.value)||0, b=parseFloat(loopB.value)||0;
+    if(looping && b>a && master.currentTime>=b){ syncTo(a); }
+    // resynchro douce si un stem dérive
+    if(playing) syncTo(master.currentTime);
+  });
+}
+</script>
+</body>
+</html>

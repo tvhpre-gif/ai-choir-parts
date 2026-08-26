@@ -1,0 +1,21 @@
+# Séparation de sources (télécharge les modèles au 1er lancement)
+audio-separator[cpu]>=0.24.0
+# Traitement audio bas niveau pour le split de registre
+librosa>=0.10.1
+soundfile>=0.12.1
+numpy>=1.24
+scipy>=1.11
+# Transposition de la voix en préservant les formants (vocodeur WORLD)
+pyworld>=0.3.4
+# Harmonisation + export MIDI/MusicXML (mode arrangement)
+music21>=9.1
+# Interface web locale
+Flask>=3.0
+# Serveur de production (déploiement cloud) + ffmpeg embarqué (repli export MP3)
+gunicorn>=21.0
+imageio-ffmpeg>=0.4.9
+
+# NOTE Mac Apple Silicon :
+#   audio-separator[cpu] fonctionne partout (CPU / MPS).
+#   Pour tenter l'accélération GPU Metal, installe plutôt torch avec support MPS
+#   (déjà le cas des builds récents de torch sur Mac) — le paquet [cpu] suffit pour ce soir.
